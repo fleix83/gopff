@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="de-CH">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Goppf! – Luft ablassen</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400..900&family=Reddit+Sans:wght@700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app" v-cloak>
+    <div class="page-column">
+    <div class="top-bar">
+      <header>
+        <div class="header-inner">
+          <img class="logo" @click="navigate('home')" src="logo2.png" alt="GOPFF!">
+          <div class="header-right">
+            <button v-if="!currentUser" class="btn-anmelden" @click="openAuth('login')">Anmelden</button>
+            <span v-if="currentUser" class="user-badge" @click="menuOpen = true"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>{{ currentUser.name }}</span>
+            <button class="menu-dots" @click="menuOpen = true">&#8942;</button>
+          </div>
+        </div>
+      </header>
+
+      <div v-if="loading" class="loading-bar"></div>
+
+      <div v-if="view === 'home'" class="top-bar-controls">
+        <div class="categories">
+          <button
+            v-for="cat in kategorien"
+            :key="cat.id"
+            :class="['cat-btn', { active: filterKategorie === cat.id }]"
+            @click="toggleFilter(cat)"
+          >{{ cat.name }}</button>
+          <button
+            v-if="filterKategorie"
+            class="cat-btn reset"
+            @click="filterKategorie = ''"
+          >Alle</button>
+        </div>
+
+        <button class="btn-primary btn-schreiben" @click="navigate('new')">Beitrag schreiben</button>
+      </div>
+    </div>
+
+    <main>
+      <!-- HOME -->
+      <section v-if="view === 'home'">
+
+        <div v-if="gefilterteBeitraege.length === 0" class="empty">
+          <p>Noch keine Beiträge{{ filterKategorieName ? ' in «' + filterKategorieName + '»' : '' }}.</p>
+          <p>Schreib den ersten!</p>
+        </div>
+
+        <article
+          v-for="beitrag in gefilterteBeitraege"
+          :key="beitrag.id"
+          class="beitrag-card"
+          @click="openBeitrag(beitrag.id)"
+        >
+          <div class="beitrag-meta">
+            <span class="beitrag-kategorie">{{ beitrag.category_name }}</span>
+            <span class="beitrag-kanton">{{ ortAnzeige(beitrag) }}</span>
+          </div>
+          <h2>{{ beitrag.company_name }}<span v-if="beitrag.product_name"> – {{ beitrag.product_name }}</span></h2>
+          <p class="beitrag-text">{{ beitrag.content }}</p>
+          <div class="beitrag-footer">
+            <span class="beitrag-autor" v-if="beitrag.user_name">{{ beitrag.user_name }}</span>
+            <span class="beitrag-autor anonym" v-else>Anonym</span>
+            <span class="beitrag-datum">{{ formatDatum(beitrag.created_at) }}</span>
+            <span class="beitrag-kommentare">{{ beitrag.comment_count }} Kommentar{{ beitrag.comment_count != 1 ? 'e' : '' }}</span>
+          </div>
+        </article>
+      </section>
+
+      <!-- NEUER BEITRAG -->
+      <section v-if="view === 'new'" class="form-section">
+        <h2>Luft ablassen</h2>
+        <form @submit.prevent="beitragErstellen">
+          <div class="form-group">
+            <label>Kategorie</label>
+            <div class="form-swatches">
+              <button
+                v-for="cat in kategorien"
+                :key="cat.id"
+                type="button"
+                :class="['cat-btn', { active: form.kategorie_id === cat.id }]"
+                @click="form.kategorie_id = form.kategorie_id === cat.id ? '' : cat.id"
+              >{{ cat.name }}</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Unternehmen</label>
+            <div class="search-field" v-if="!form.company_id">
+              <input
+                type="text"
+                v-model="companySearch"
+                placeholder="Unternehmen suchen..."
+                @focus="companyFocused = true"
+                @blur="() => window.setTimeout(() => companyFocused = false, 200)"
+                autocomplete="off"
+              >
+            </div>
+            <div v-if="form.company_id" class="selected-company">
+              <span>{{ selectedCompanyName }}</span>
+              <button type="button" class="btn-clear" @click="clearCompany">&times;</button>
+            </div>
+            <ul class="search-results" v-if="companyFocused && !form.company_id">
+              <li class="search-results-add" @mousedown="openCompanyModal">+ Neues Unternehmen hinzufügen</li>
+              <li v-for="c in gefilterteCompanies" :key="c.id" @mousedown="selectCompany(c)">{{ c.name }}</li>
+            </ul>
+          </div>
+          <div class="form-group" v-if="form.company_id">
+            <label>Produkt / Dienstleistung (optional)</label>
+            <div class="search-field" v-if="!form.product_id">
+              <input
+                type="text"
+                v-model="productSearch"
+                placeholder="Produkt suchen..."
+                @focus="productFocused = true"
+                @blur="() => window.setTimeout(() => productFocused = false, 200)"
+                autocomplete="off"
+              >
+            </div>
+            <div v-if="form.product_id" class="selected-company">
+              <span>{{ selectedProductName }}</span>
+              <button type="button" class="btn-clear" @click="clearProduct">&times;</button>
+            </div>
+            <ul class="search-results" v-if="productFocused && !form.product_id">
+              <li class="search-results-add" @mousedown="openProductModal">+ Neues Produkt hinzufügen</li>
+              <li v-for="p in gefilterteProducts" :key="p.id" @mousedown="selectProduct(p)">{{ p.name }}</li>
+            </ul>
+          </div>
+          <div class="form-group">
+            <label for="kanton">Kanton</label>
+            <select id="kanton" v-model="form.kanton" required>
+              <option value="">Bitte wählen</option>
+              <option v-for="k in kantone" :key="k" :value="k">{{ k }}</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="text">Was nervt?</label>
+            <textarea id="text" v-model="form.text" required rows="6" placeholder="Schreib dir den Frust von der Seele..."></textarea>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" @click="navigate('home')">Abbrechen</button>
+            <button type="submit" class="btn-primary" :disabled="!form.company_id || !form.kanton || !form.text.trim()">Goppf!</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- EINZELNER BEITRAG -->
+      <section v-if="view === 'detail'" class="detail-section">
+        <button class="btn-back" @click="navigate('home')">&larr; Zurück</button>
+        <template v-if="aktiverBeitrag">
+          <article class="beitrag-detail">
+            <div class="beitrag-meta">
+              <span class="beitrag-kategorie">{{ aktiverBeitrag.category_name }}</span>
+              <span class="beitrag-kanton">{{ ortAnzeige(aktiverBeitrag) }}</span>
+            </div>
+            <h2>{{ aktiverBeitrag.company_name }}<span v-if="aktiverBeitrag.product_name"> – {{ aktiverBeitrag.product_name }}</span></h2>
+            <div class="detail-meta-line">
+              <span class="beitrag-autor" v-if="aktiverBeitrag.user_name">{{ aktiverBeitrag.user_name }}</span>
+              <span class="beitrag-autor anonym" v-else>Anonym</span>
+              <span class="beitrag-datum">{{ formatDatum(aktiverBeitrag.created_at) }}</span>
+            </div>
+            <p class="beitrag-fulltext">{{ aktiverBeitrag.content }}</p>
+          </article>
+
+          <div class="kommentare">
+            <h3>Kommentare ({{ aktiverBeitrag.kommentare.length }})</h3>
+            <div v-if="aktiverBeitrag.kommentare.length === 0" class="empty-small">
+              <p>Noch keine Kommentare.</p>
+            </div>
+            <div v-for="kommentar in aktiverBeitrag.kommentare" :key="kommentar.id" class="kommentar">
+              <div class="kommentar-header">
+                <span class="kommentar-autor" v-if="kommentar.user_name">{{ kommentar.user_name }}</span>
+                <span class="kommentar-autor anonym" v-else>Anonym</span>
+                <span class="kommentar-datum">{{ formatDatum(kommentar.created_at) }}</span>
+              </div>
+              <p>{{ kommentar.content }}</p>
+            </div>
+            <button v-if="!kommentarFormOpen" class="btn-secondary" @click="kommentarFormOpen = true">Kommentieren</button>
+            <form v-if="kommentarFormOpen" @submit.prevent="kommentarErstellen" class="kommentar-form">
+              <textarea v-model="kommentarText" placeholder="Dein Kommentar..." rows="3" required></textarea>
+              <div class="kommentar-form-actions">
+                <button type="button" class="btn-secondary" @click="kommentarFormOpen = false; kommentarText = ''">Abbrechen</button>
+                <button type="submit" class="btn-primary">Absenden</button>
+              </div>
+            </form>
+          </div>
+        </template>
+      </section>
+
+      <!-- KATEGORIEN VERWALTEN -->
+      <section v-if="view === 'kategorien'" class="form-section">
+        <button class="btn-back" @click="navigate('home')">&larr; Zurück</button>
+        <h2>Kategorien verwalten</h2>
+        <ul class="kategorie-list">
+          <li v-for="(cat, index) in kategorien" :key="cat.id">
+            <template v-if="editKategorieIndex === index">
+              <input
+                type="text"
+                v-model="editKategorieName"
+                class="kategorie-edit-input"
+                @keyup.enter="kategorieSpeichernEdit(index)"
+                @keyup.escape="editKategorieIndex = -1"
+              >
+              <div class="kategorie-actions">
+                <button class="btn-save" @click="kategorieSpeichernEdit(index)">&#10003;</button>
+                <button class="btn-cancel" @click="editKategorieIndex = -1">&times;</button>
+              </div>
+            </template>
+            <template v-else>
+              <span @click="kategorieBearbeiten(index)" class="kategorie-name">{{ cat.name }}</span>
+              <button class="btn-delete" @click="kategorieLoeschen(cat)">&times;</button>
+            </template>
+          </li>
+        </ul>
+        <form @submit.prevent="kategorieHinzufuegen" class="kategorie-form">
+          <input type="text" v-model="neueKategorie" placeholder="Neue Kategorie..." required>
+          <button type="submit" class="btn-primary">Hinzufügen</button>
+        </form>
+      </section>
+
+      <!-- FIRMEN VERWALTEN -->
+      <section v-if="view === 'firmen'" class="form-section">
+        <button class="btn-back" @click="navigate('home')">&larr; Zurück</button>
+        <h2>Firmen verwalten</h2>
+
+        <div class="search-field" style="margin-bottom: 1.5rem;">
+          <input
+            type="text"
+            v-model="firmenSuche"
+            placeholder="Firma suchen..."
+            autocomplete="off"
+          >
+        </div>
+
+        <ul class="kategorie-list">
+          <li v-for="comp in gefilterteFirmen" :key="comp.id" style="flex-direction: column; align-items: stretch;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <template v-if="editFirmaId === comp.id">
+                <input
+                  type="text"
+                  v-model="editFirmaForm.name"
+                  class="kategorie-edit-input"
+                  @keyup.enter="firmaSpeichern(comp.id)"
+                  @keyup.escape="editFirmaId = null"
+                  placeholder="Firmenname"
+                >
+                <div class="kategorie-actions">
+                  <button class="btn-save" @click="firmaSpeichern(comp.id)">&#10003;</button>
+                  <button class="btn-cancel" @click="editFirmaId = null">&times;</button>
+                </div>
+              </template>
+              <template v-else>
+                <div style="flex: 1; cursor: pointer;" @click="firmaBearbeiten(comp)">
+                  <span class="kategorie-name" style="display: block;">{{ comp.name }}</span>
+                  <span style="font-size: 0.8rem; color: #999;">{{ ortAnzeige({ company_municipality: comp.municipality, company_canton: comp.canton }) }}</span>
+                </div>
+                <button class="btn-secondary" style="font-size: 0.8rem; padding: 0.3rem 0.7rem; margin-left: 0.5rem;" @click="firmaProdukte(comp)">Produkte</button>
+                <button class="btn-delete" @click="firmaLoeschen(comp)">&times;</button>
+              </template>
+            </div>
+
+            <!-- Inline edit fields for municipality/canton/category -->
+            <div v-if="editFirmaId === comp.id" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem;">
+              <input
+                type="text"
+                v-model="editFirmaGemeindeSearch"
+                class="kategorie-edit-input"
+                placeholder="Gemeinde suchen..."
+                @focus="editFirmaGemeindeFocused = true"
+                @blur="() => window.setTimeout(() => editFirmaGemeindeFocused = false, 200)"
+                autocomplete="off"
+                style="flex: 1; min-width: 150px;"
+              >
+              <select v-model="editFirmaForm.category_id" class="kategorie-edit-input" style="flex: 1; min-width: 150px;">
+                <option value="">Keine Kategorie</option>
+                <option v-for="cat in kategorien" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+              </select>
+            </div>
+            <ul class="search-results" v-if="editFirmaId === comp.id && editFirmaGemeindeFocused && editFirmaGefilterteGemeinden.length > 0" style="margin-top: 0;">
+              <li v-for="g in editFirmaGefilterteGemeinden" :key="g.name + g.kt" @mousedown="editFirmaSelectGemeinde(g)">{{ g.name }} {{ g.kt }}</li>
+            </ul>
+
+            <!-- Produkte inline -->
+            <div v-if="firmaProduktId === comp.id" style="margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px solid #eee;">
+              <div style="font-size: 0.85rem; font-weight: 600; color: #555; margin-bottom: 0.5rem;">Produkte</div>
+              <ul class="kategorie-list" style="margin-bottom: 0.8rem;">
+                <li v-for="prod in firmaProduktListe" :key="prod.id">
+                  <template v-if="editProduktId === prod.id">
+                    <input
+                      type="text"
+                      v-model="editProduktForm.name"
+                      class="kategorie-edit-input"
+                      @keyup.enter="produktSpeichern(prod.id)"
+                      @keyup.escape="editProduktId = null"
+                      placeholder="Produktname"
+                    >
+                    <input
+                      type="text"
+                      v-model="editProduktForm.model"
+                      class="kategorie-edit-input"
+                      @keyup.enter="produktSpeichern(prod.id)"
+                      placeholder="Modell"
+                      style="margin-left: 0.3rem; max-width: 120px;"
+                    >
+                    <div class="kategorie-actions">
+                      <button class="btn-save" @click="produktSpeichern(prod.id)">&#10003;</button>
+                      <button class="btn-cancel" @click="editProduktId = null">&times;</button>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <span @click="produktBearbeiten(prod)" class="kategorie-name">{{ prod.name }}<span v-if="prod.model" style="color: #999;"> – {{ prod.model }}</span></span>
+                    <button class="btn-delete" @click="produktLoeschen(prod)">&times;</button>
+                  </template>
+                </li>
+              </ul>
+              <div v-if="firmaProduktListe.length === 0" class="empty-small">Keine Produkte.</div>
+              <form @submit.prevent="produktHinzufuegen(comp.id)" class="kategorie-form">
+                <input type="text" v-model="neuesProduktName" placeholder="Neues Produkt..." required>
+                <button type="submit" class="btn-primary">Hinzufügen</button>
+              </form>
+            </div>
+          </li>
+        </ul>
+
+        <div v-if="gefilterteFirmen.length === 0" class="empty-small">Keine Firmen gefunden.</div>
+      </section>
+
+      <!-- BEITRÄGE VERWALTEN -->
+      <section v-if="view === 'beitraege'" class="form-section">
+        <button class="btn-back" @click="navigate('home')">&larr; Zurück</button>
+        <h2>Beiträge verwalten</h2>
+
+        <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+          <div class="search-field" style="flex: 1; min-width: 180px;">
+            <input type="text" v-model="beitragSuche" placeholder="Beitrag suchen..." autocomplete="off">
+          </div>
+          <select v-model="beitragFilter" style="border: 1px solid #ddd; border-radius: 8px; padding: 0.5rem; font-size: 0.85rem; background: #fff;">
+            <option value="alle">Alle</option>
+            <option value="flagged">Gemeldet</option>
+          </select>
+        </div>
+
+        <ul class="kategorie-list">
+          <li v-for="post in gefilterteBeitraegeAdmin" :key="post.id" style="flex-direction: column; align-items: stretch;">
+            <!-- Post header -->
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem;">
+              <div style="flex: 1;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.2rem;">
+                  <span v-if="post.flagged" style="color: #e53835; font-size: 0.75rem; font-weight: 700; border: 1px solid #e53835; border-radius: 4px; padding: 0.1rem 0.4rem;">GEMELDET</span>
+                  <span style="font-size: 0.8rem; color: #999;">{{ post.category_name || 'Ohne Kategorie' }} · {{ formatDatum(post.created_at) }}</span>
+                </div>
+                <span class="kategorie-name" style="display: block; font-weight: 700;" @click="beitragBearbeiten(post)">{{ post.company_name }}<span v-if="post.product_name"> – {{ post.product_name }}</span></span>
+                <p style="font-size: 0.9rem; color: #555; margin-top: 0.2rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">{{ post.content }}</p>
+              </div>
+              <div style="display: flex; gap: 0.3rem; flex-shrink: 0;">
+                <button class="btn-delete" :style="{ color: post.flagged ? '#e53835' : '#ccc' }" @click="beitragFlag(post)" title="Melden">&#9873;</button>
+                <button class="btn-delete" @click="beitragLoeschen(post)" title="Löschen">&times;</button>
+              </div>
+            </div>
+
+            <!-- Edit form -->
+            <div v-if="editBeitragId === post.id" style="margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px solid #eee;">
+              <div class="form-group" style="margin-bottom: 0.8rem;">
+                <label>Firma</label>
+                <div class="search-field" v-if="!editBeitragForm.company_id">
+                  <input
+                    type="text"
+                    v-model="editBeitragCompanySearch"
+                    placeholder="Firma suchen..."
+                    @focus="editBeitragCompanyFocused = true"
+                    @blur="() => window.setTimeout(() => editBeitragCompanyFocused = false, 200)"
+                    autocomplete="off"
+                  >
+                </div>
+                <div v-if="editBeitragForm.company_id" class="selected-company">
+                  <span>{{ editBeitragCompanyName }}</span>
+                  <button type="button" class="btn-clear" @click="editBeitragForm.company_id = ''; editBeitragForm.product_id = ''; editBeitragCompanySearch = ''">&times;</button>
+                </div>
+                <ul class="search-results" v-if="editBeitragCompanyFocused && !editBeitragForm.company_id">
+                  <li v-for="c in editBeitragGefilterteCompanies" :key="c.id" @mousedown="editBeitragForm.company_id = c.id; editBeitragCompanySearch = c.name">{{ c.name }}</li>
+                </ul>
+              </div>
+              <div class="form-group" v-if="editBeitragForm.company_id" style="margin-bottom: 0.8rem;">
+                <label>Produkt (optional)</label>
+                <select v-model="editBeitragForm.product_id" style="width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 0.5rem; font-size: 0.9rem; background: #fff;">
+                  <option value="">Kein Produkt</option>
+                  <option v-for="p in editBeitragProdukte" :key="p.id" :value="p.id">{{ p.name }}<template v-if="p.model"> – {{ p.model }}</template></option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom: 0.8rem;">
+                <label>Kanton</label>
+                <select v-model="editBeitragForm.canton" style="width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 0.5rem; font-size: 0.9rem; background: #fff;">
+                  <option v-for="k in kantone" :key="k" :value="k">{{ k }}</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom: 0.8rem;">
+                <label>Inhalt</label>
+                <textarea v-model="editBeitragForm.content" rows="4" style="width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 0.5rem; font-size: 0.9rem; resize: vertical; background: #fff;"></textarea>
+              </div>
+              <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+                <button class="btn-secondary" @click="editBeitragId = null">Abbrechen</button>
+                <button class="btn-primary" @click="beitragSpeichern(post.id)">Speichern</button>
+              </div>
+            </div>
+
+            <!-- Comments -->
+            <div v-if="editBeitragId === post.id && beitragKommentare.length > 0" style="margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px solid #eee;">
+              <div style="font-size: 0.85rem; font-weight: 600; color: #555; margin-bottom: 0.5rem;">Kommentare ({{ beitragKommentare.length }})</div>
+              <ul class="kategorie-list" style="margin-bottom: 0;">
+                <li v-for="km in beitragKommentare" :key="km.id">
+                  <template v-if="editKommentarId === km.id">
+                    <textarea v-model="editKommentarText" rows="2" class="kategorie-edit-input" style="resize: vertical;" @keyup.escape="editKommentarId = null"></textarea>
+                    <div class="kategorie-actions">
+                      <button class="btn-save" @click="kommentarSpeichernAdmin(km.id)">&#10003;</button>
+                      <button class="btn-cancel" @click="editKommentarId = null">&times;</button>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <div style="flex: 1;" @click="kommentarBearbeitenAdmin(km)">
+                      <span style="font-size: 0.8rem; color: #999;">{{ km.user_name || 'Anonym' }} · {{ formatDatum(km.created_at) }}</span>
+                      <p class="kategorie-name" style="font-size: 0.9rem; color: #444; margin-top: 0.1rem;">{{ km.content }}</p>
+                    </div>
+                    <button class="btn-delete" @click="kommentarLoeschenAdmin(km)">&times;</button>
+                  </template>
+                </li>
+              </ul>
+            </div>
+          </li>
+        </ul>
+
+        <div v-if="gefilterteBeitraegeAdmin.length === 0" class="empty-small">Keine Beiträge gefunden.</div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Goppf! &ndash; Weil's manchmal einfach nervt.</p>
+    </footer>
+    </div>
+
+    <!-- MODAL: HINWEIS -->
+    <div class="modal-overlay" v-if="showFormNote" @click.self="formNoteAccepted = true">
+      <div class="modal">
+        <div class="form-note">
+          <p>Auch wenn Du genervt bist: denke an den Menschen hinter dem Produkt, der Dienstleistung oder der Firma. Bitte formuliere mit Anstand und Respekt.</p>
+          <button class="btn-primary" @click="formNoteAccepted = true">Verstanden</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: NEUES UNTERNEHMEN -->
+    <div class="modal-overlay" v-if="showCompanyModal" @click.self="showCompanyModal = false">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Neues Unternehmen</h3>
+          <button class="menu-close" @click="showCompanyModal = false">&times;</button>
+        </div>
+        <form @submit.prevent="companyErstellen">
+          <div class="form-group">
+            <label>Unternehmen</label>
+            <input type="text" v-model="companyForm.name" placeholder="Name des Unternehmens" required>
+          </div>
+          <div class="form-group">
+            <label>Gemeinde</label>
+            <input
+              type="text"
+              v-model="gemeindeSearch"
+              placeholder="Gemeinde suchen (z.B. Meilen ZH)..."
+              @focus="gemeindeFocused = true"
+              @blur="() => window.setTimeout(() => gemeindeFocused = false, 200)"
+              autocomplete="off"
+            >
+            <ul class="search-results" v-if="gemeindeFocused && gefilterteGemeinden.length > 0">
+              <li v-for="g in gefilterteGemeinden" :key="g.name + g.kt" @mousedown="selectGemeinde(g)">{{ g.name }} {{ g.kt }}</li>
+            </ul>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" @click="showCompanyModal = false">Abbrechen</button>
+            <button type="submit" class="btn-primary" :disabled="!companyForm.name.trim()">Erstellen</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL: NEUES PRODUKT -->
+    <div class="modal-overlay" v-if="showProductModal" @click.self="showProductModal = false">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Neues Produkt / Dienstleistung</h3>
+          <button class="menu-close" @click="showProductModal = false">&times;</button>
+        </div>
+        <form @submit.prevent="productErstellen">
+          <div class="form-group">
+            <label>Bezeichnung</label>
+            <input type="text" v-model="productForm.name" placeholder="Name des Produkts / der Dienstleistung" required>
+          </div>
+          <div class="form-group">
+            <label>Modell (optional)</label>
+            <input type="text" v-model="productForm.model" placeholder="z.B. Modell, Version...">
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" @click="showProductModal = false">Abbrechen</button>
+            <button type="submit" class="btn-primary" :disabled="!productForm.name.trim()">Erstellen</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL: AUTH -->
+    <div class="modal-overlay" v-if="showAuthModal" @click.self="showAuthModal = false">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>{{ authMode === 'login' ? 'Anmelden' : 'Registrieren' }}</h3>
+          <button class="menu-close" @click="showAuthModal = false">&times;</button>
+        </div>
+        <form @submit.prevent="authSubmit">
+          <div class="form-group" v-if="authMode === 'signup'">
+            <label>Name</label>
+            <input type="text" v-model="authForm.name" placeholder="Dein Name" required>
+          </div>
+          <div class="form-group">
+            <label>E-Mail</label>
+            <input type="email" v-model="authForm.email" placeholder="deine@email.ch" required>
+          </div>
+          <div class="form-group">
+            <label>Passwort</label>
+            <input type="password" v-model="authForm.password" placeholder="Passwort" required minlength="8">
+          </div>
+          <p v-if="authError" class="auth-error">{{ authError }}</p>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" @click="showAuthModal = false">Abbrechen</button>
+            <button type="submit" class="btn-primary" :disabled="authLoading">
+              {{ authLoading ? '...' : (authMode === 'login' ? 'Anmelden' : 'Registrieren') }}
+            </button>
+          </div>
+        </form>
+        <p class="auth-switch">
+          <template v-if="authMode === 'login'">
+            Noch kein Konto? <a href="#" @click.prevent="authMode = 'signup'; authError = ''">Registrieren</a>
+          </template>
+          <template v-else>
+            Bereits registriert? <a href="#" @click.prevent="authMode = 'login'; authError = ''">Anmelden</a>
+          </template>
+        </p>
+      </div>
+    </div>
+
+    <!-- SLIDE MENU -->
+    <div class="menu-overlay" v-if="menuOpen" @click="menuOpen = false"></div>
+    <nav class="menu-panel" :class="{ open: menuOpen }">
+      <div class="menu-panel-header">
+        <span>Menü</span>
+        <button class="menu-close" @click="menuOpen = false">&times;</button>
+      </div>
+      <div v-if="currentUser" class="menu-user-info">
+        <span class="menu-user-name">{{ currentUser.name }}</span>
+        <span class="menu-user-email">{{ currentUser.email }}</span>
+      </div>
+      <ul class="menu-nav">
+        <li><button @click="navigate('kategorien')">Kategorien verwalten</button></li>
+        <li><button @click="navigate('firmen')">Firmen verwalten</button></li>
+        <li><button @click="navigate('beitraege')">Beiträge verwalten</button></li>
+        <li v-if="currentUser"><button @click="logout">Abmelden</button></li>
+        <li v-if="!currentUser"><button @click="openAuth('login'); menuOpen = false">Anmelden</button></li>
+      </ul>
+    </nav>
+  </div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
