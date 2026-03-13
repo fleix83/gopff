@@ -343,7 +343,7 @@ createApp({
     }
 
     async function ladeCompanies() {
-      const rows = await sql`SELECT id, name, category_id, municipality, canton, website FROM company ORDER BY name`
+      const rows = await sql`SELECT id, name, municipality, canton, website FROM company ORDER BY name`
       companies.value = rows
     }
 
@@ -358,13 +358,13 @@ createApp({
                p.company_id, p.product_id,
                c.name as company_name,
                c.municipality as company_municipality, c.canton as company_canton,
-               cat.name as category_name, cat.id as category_id,
                pr.name as product_name,
                u.name as user_name,
-               (SELECT count(*) FROM comment cm WHERE cm.post_id = p.id) as comment_count
+               (SELECT count(*) FROM comment cm WHERE cm.post_id = p.id) as comment_count,
+               (SELECT array_agg(cc.category_id) FROM company_category cc WHERE cc.company_id = c.id) as category_ids,
+               (SELECT string_agg(cat.name, ', ' ORDER BY cat.sort_order) FROM company_category cc JOIN category cat ON cat.id = cc.category_id WHERE cc.company_id = c.id) as category_name
         FROM post p
         JOIN company c ON c.id = p.company_id
-        LEFT JOIN category cat ON cat.id = c.category_id
         LEFT JOIN product pr ON pr.id = p.product_id
         LEFT JOIN app_user u ON u.id = p.user_id
         ORDER BY p.created_at DESC
@@ -388,12 +388,12 @@ createApp({
         SELECT p.id, p.content, p.canton, p.created_at,
                c.name as company_name, c.id as company_id,
                c.municipality as company_municipality, c.canton as company_canton,
-               cat.name as category_name, cat.id as category_id,
                pr.name as product_name,
-               u.name as user_name
+               u.name as user_name,
+               (SELECT array_agg(cc.category_id) FROM company_category cc WHERE cc.company_id = c.id) as category_ids,
+               (SELECT string_agg(cat.name, ', ' ORDER BY cat.sort_order) FROM company_category cc JOIN category cat ON cat.id = cc.category_id WHERE cc.company_id = c.id) as category_name
         FROM post p
         JOIN company c ON c.id = p.company_id
-        LEFT JOIN category cat ON cat.id = c.category_id
         LEFT JOIN product pr ON pr.id = p.product_id
         LEFT JOIN app_user u ON u.id = p.user_id
         WHERE p.id = ${id}
@@ -411,7 +411,7 @@ createApp({
 
     const gefilterteBeitraege = computed(() => {
       if (!filterKategorie.value) return beitraege.value
-      return beitraege.value.filter(b => b.category_id === filterKategorie.value)
+      return beitraege.value.filter(b => b.category_ids && b.category_ids.includes(filterKategorie.value))
     })
 
     const filterKategorieName = computed(() => {
@@ -454,6 +454,10 @@ createApp({
       await ladeBeitragDetail(id)
       loading.value = false
       window.scrollTo(0, 0)
+    }
+
+    function delayedBlur(fn) {
+      setTimeout(() => fn(), 200)
     }
 
     // ---- COMPANY SELECTION ----
@@ -510,10 +514,13 @@ createApp({
       const canton = companyForm.value.canton || null
       try {
         const rows = await sql`
-          INSERT INTO company (name, category_id, municipality, canton)
-          VALUES (${name}, ${catId}, ${municipality}, ${canton})
+          INSERT INTO company (name, municipality, canton)
+          VALUES (${name}, ${municipality}, ${canton})
           RETURNING id, name, municipality, canton
         `
+        if (rows.length > 0 && catId) {
+          await sql`INSERT INTO company_category (company_id, category_id) VALUES (${rows[0].id}, ${catId}) ON CONFLICT DO NOTHING`
+        }
         showCompanyModal.value = false
         if (rows.length > 0) {
           selectCompany(rows[0])
@@ -618,17 +625,21 @@ createApp({
     async function kategorieSpeichernEdit(index) {
       const name = editKategorieName.value.trim()
       if (!name) return
-      const cat = kategorien.value[index]
-      await sql`UPDATE category SET name = ${name} WHERE id = ${cat.id}`
-      editKategorieIndex.value = -1
-      await Promise.all([ladeKategorien(), ladeBeitraege()])
+      try {
+        const cat = kategorien.value[index]
+        await sql`UPDATE category SET name = ${name} WHERE id = ${cat.id}`
+        editKategorieIndex.value = -1
+        await Promise.all([ladeKategorien(), ladeBeitraege()])
+      } catch (e) {
+        alert('Fehler beim Speichern: ' + e.message)
+      }
     }
 
     // ---- FIRMEN VERWALTEN ----
 
     const firmenSuche = ref('')
     const editFirmaId = ref(null)
-    const editFirmaForm = ref({ name: '', municipality: '', canton: '', category_id: '' })
+    const editFirmaForm = ref({ name: '', municipality: '', canton: '', category_ids: [] })
     const editFirmaGemeindeSearch = ref('')
     const editFirmaGemeindeFocused = ref(false)
     const firmaProduktId = ref(null)
@@ -657,13 +668,14 @@ createApp({
       ).slice(0, 15)
     })
 
-    function firmaBearbeiten(comp) {
+    async function firmaBearbeiten(comp) {
       editFirmaId.value = comp.id
+      const cats = await sql`SELECT category_id FROM company_category WHERE company_id = ${comp.id}`
       editFirmaForm.value = {
         name: comp.name,
         municipality: comp.municipality || '',
         canton: comp.canton || '',
-        category_id: comp.category_id || ''
+        category_ids: cats.map(c => c.category_id)
       }
       const kuerzel = comp.canton ? kantonKuerzel[comp.canton] : ''
       editFirmaGemeindeSearch.value = comp.municipality ? comp.municipality + (kuerzel ? ' ' + kuerzel : '') : ''
@@ -680,19 +692,27 @@ createApp({
       const name = editFirmaForm.value.name.trim()
       if (!name) return
       loading.value = true
-      const municipality = editFirmaForm.value.municipality || null
-      const canton = editFirmaForm.value.canton || null
-      const categoryId = editFirmaForm.value.category_id || null
-      await sql`
-        UPDATE company SET name = ${name}, municipality = ${municipality}, canton = ${canton}, category_id = ${categoryId}
-        WHERE id = ${id}
-      `
-      editFirmaId.value = null
-      // Refresh the current admin search results + posts
-      if (firmenSuche.value.trim().length >= 2) {
-        await Promise.all([searchCompanies(firmenSuche.value, firmenSearchResults, firmenSearchLoading), ladeBeitraege()])
-      } else {
-        await ladeBeitraege()
+      try {
+        const municipality = editFirmaForm.value.municipality || null
+        const canton = editFirmaForm.value.canton || null
+        const categoryIds = editFirmaForm.value.category_ids || []
+        await sql`
+          UPDATE company SET name = ${name}, municipality = ${municipality}, canton = ${canton}
+          WHERE id = ${id}
+        `
+        await sql`DELETE FROM company_category WHERE company_id = ${id}`
+        for (const catId of categoryIds) {
+          await sql`INSERT INTO company_category (company_id, category_id) VALUES (${id}, ${catId}) ON CONFLICT DO NOTHING`
+        }
+        editFirmaId.value = null
+        // Refresh the current admin search results + posts
+        if (firmenSuche.value.trim().length >= 2) {
+          await Promise.all([searchCompanies(firmenSuche.value, firmenSearchResults, firmenSearchLoading), ladeBeitraege()])
+        } else {
+          await ladeBeitraege()
+        }
+      } catch (e) {
+        alert('Fehler beim Speichern: ' + e.message)
       }
       loading.value = false
     }
@@ -725,10 +745,14 @@ createApp({
       const name = editProduktForm.value.name.trim()
       if (!name) return
       loading.value = true
-      const model = editProduktForm.value.model.trim() || null
-      await sql`UPDATE product SET name = ${name}, model = ${model} WHERE id = ${id}`
-      editProduktId.value = null
-      await ladeProducts()
+      try {
+        const model = editProduktForm.value.model.trim() || null
+        await sql`UPDATE product SET name = ${name}, model = ${model} WHERE id = ${id}`
+        editProduktId.value = null
+        await ladeProducts()
+      } catch (e) {
+        alert('Fehler beim Speichern: ' + e.message)
+      }
       loading.value = false
     }
 
@@ -817,13 +841,17 @@ createApp({
       const f = editBeitragForm.value
       if (!f.company_id || !f.canton || !f.content.trim()) return
       loading.value = true
-      const productId = f.product_id || null
-      await sql`
-        UPDATE post SET company_id = ${f.company_id}, product_id = ${productId}, canton = ${f.canton}, content = ${f.content.trim()}
-        WHERE id = ${id}
-      `
-      editBeitragId.value = null
-      await ladeBeitraege()
+      try {
+        const productId = f.product_id || null
+        await sql`
+          UPDATE post SET company_id = ${f.company_id}, product_id = ${productId}, canton = ${f.canton}, content = ${f.content.trim()}
+          WHERE id = ${id}
+        `
+        editBeitragId.value = null
+        await ladeBeitraege()
+      } catch (e) {
+        alert('Fehler beim Speichern: ' + e.message)
+      }
       loading.value = false
     }
 
@@ -857,9 +885,13 @@ createApp({
       const text = editKommentarText.value.trim()
       if (!text) return
       loading.value = true
-      await sql`UPDATE comment SET content = ${text} WHERE id = ${id}`
-      editKommentarId.value = null
-      beitragKommentare.value = await ladeKommentare(editBeitragId.value)
+      try {
+        await sql`UPDATE comment SET content = ${text} WHERE id = ${id}`
+        editKommentarId.value = null
+        beitragKommentare.value = await ladeKommentare(editBeitragId.value)
+      } catch (e) {
+        alert('Fehler beim Speichern: ' + e.message)
+      }
       loading.value = false
     }
 
@@ -905,7 +937,7 @@ createApp({
       showCompanyModal, showProductModal, companyForm, productForm,
       gemeindeSearch, gemeindeFocused, gefilterteGemeinden,
       currentUser, showAuthModal, authMode, authForm, authError, authLoading,
-      navigate, toggleFilter, openBeitrag,
+      delayedBlur, navigate, toggleFilter, openBeitrag,
       selectCompany, clearCompany,
       selectProduct, clearProduct,
       openCompanyModal, companyErstellen, selectGemeinde,

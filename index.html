@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Goppf! – Luft ablassen</title>
+  <title>Goppf!</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400..900&family=Reddit+Sans:wght@700&display=swap" rel="stylesheet">
@@ -61,8 +61,8 @@
           @click="openBeitrag(beitrag.id)"
         >
           <div class="beitrag-meta">
-            <span class="beitrag-kategorie">{{ beitrag.category_name }}</span>
             <span class="beitrag-kanton">{{ ortAnzeige(beitrag) }}</span>
+            <span v-if="beitrag.category_name" class="beitrag-kategorie">{{ beitrag.category_name }}</span>
           </div>
           <h2>{{ beitrag.company_name }}<span v-if="beitrag.product_name"> – {{ beitrag.product_name }}</span></h2>
           <p class="beitrag-text">{{ beitrag.content }}</p>
@@ -77,7 +77,6 @@
 
       <!-- NEUER BEITRAG -->
       <section v-if="view === 'new'" class="form-section">
-        <h2>Luft ablassen</h2>
         <form @submit.prevent="beitragErstellen">
           <div class="form-group">
             <label>Kategorie</label>
@@ -99,7 +98,7 @@
                 v-model="companySearch"
                 placeholder="Unternehmen suchen..."
                 @focus="companyFocused = true"
-                @blur="() => window.setTimeout(() => companyFocused = false, 200)"
+                @blur="delayedBlur(() => companyFocused = false)"
                 autocomplete="off"
               >
             </div>
@@ -123,7 +122,7 @@
                 v-model="productSearch"
                 placeholder="Produkt suchen..."
                 @focus="productFocused = true"
-                @blur="() => window.setTimeout(() => productFocused = false, 200)"
+                @blur="delayedBlur(() => productFocused = false)"
                 autocomplete="off"
               >
             </div>
@@ -160,8 +159,8 @@
         <template v-if="aktiverBeitrag">
           <article class="beitrag-detail">
             <div class="beitrag-meta">
-              <span class="beitrag-kategorie">{{ aktiverBeitrag.category_name }}</span>
               <span class="beitrag-kanton">{{ ortAnzeige(aktiverBeitrag) }}</span>
+              <span v-if="aktiverBeitrag.category_name" class="beitrag-kategorie">{{ aktiverBeitrag.category_name }}</span>
             </div>
             <h2>{{ aktiverBeitrag.company_name }}<span v-if="aktiverBeitrag.product_name"> – {{ aktiverBeitrag.product_name }}</span></h2>
             <div class="detail-meta-line">
@@ -277,14 +276,16 @@
                 class="kategorie-edit-input"
                 placeholder="Gemeinde suchen..."
                 @focus="editFirmaGemeindeFocused = true"
-                @blur="() => window.setTimeout(() => editFirmaGemeindeFocused = false, 200)"
+                @blur="delayedBlur(() => editFirmaGemeindeFocused = false)"
                 autocomplete="off"
                 style="flex: 1; min-width: 150px;"
               >
-              <select v-model="editFirmaForm.category_id" class="kategorie-edit-input" style="flex: 1; min-width: 150px;">
-                <option value="">Keine Kategorie</option>
-                <option v-for="cat in kategorien" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
-              </select>
+              <div style="flex: 1; min-width: 150px; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;">
+                <label v-for="cat in kategorien" :key="cat.id" style="display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.85rem; cursor: pointer; color: #555;">
+                  <input type="checkbox" :value="cat.id" v-model="editFirmaForm.category_ids" style="accent-color: #e53935;">
+                  {{ cat.name }}
+                </label>
+              </div>
             </div>
             <ul class="search-results" v-if="editFirmaId === comp.id && editFirmaGemeindeFocused && editFirmaGefilterteGemeinden.length > 0" style="margin-top: 0;">
               <li v-for="g in editFirmaGefilterteGemeinden" :key="g.name + g.kt" @mousedown="editFirmaSelectGemeinde(g)">{{ g.name }} {{ g.kt }}</li>
@@ -381,7 +382,7 @@
                     v-model="editBeitragCompanySearch"
                     placeholder="Firma suchen..."
                     @focus="editBeitragCompanyFocused = true"
-                    @blur="() => window.setTimeout(() => editBeitragCompanyFocused = false, 200)"
+                    @blur="delayedBlur(() => editBeitragCompanyFocused = false)"
                     autocomplete="off"
                   >
                 </div>
@@ -476,13 +477,13 @@
             <input type="text" v-model="companyForm.name" placeholder="Name des Unternehmens" required>
           </div>
           <div class="form-group">
-            <label>Gemeinde</label>
+            <label>Gemeinde oder Land, bei ausländischer Firma</label>
             <input
               type="text"
               v-model="gemeindeSearch"
               placeholder="Gemeinde suchen (z.B. Meilen ZH)..."
               @focus="gemeindeFocused = true"
-              @blur="() => window.setTimeout(() => gemeindeFocused = false, 200)"
+              @blur="delayedBlur(() => gemeindeFocused = false)"
               autocomplete="off"
             >
             <ul class="search-results" v-if="gemeindeFocused && gefilterteGemeinden.length > 0">
