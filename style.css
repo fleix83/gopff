@@ -638,6 +638,24 @@ footer {
   padding: 0.5rem 0;
 }
 
+.search-hint {
+  font-size: 0.85rem;
+  color: #bbb !important;
+  cursor: default !important;
+  padding: 0.6rem 0.7rem;
+}
+
+.search-hint:hover {
+  background: transparent !important;
+  color: #bbb !important;
+}
+
+.search-result-detail {
+  font-size: 0.8rem;
+  color: #999;
+  font-weight: 400;
+}
+
 /* Loading Bar */
 .loading-bar {
   height: 2px;

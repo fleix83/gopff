@@ -109,7 +109,10 @@
             </div>
             <ul class="search-results" v-if="companyFocused && !form.company_id">
               <li class="search-results-add" @mousedown="openCompanyModal">+ Neues Unternehmen hinzufügen</li>
-              <li v-for="c in gefilterteCompanies" :key="c.id" @mousedown="selectCompany(c)">{{ c.name }}</li>
+              <li v-if="companySearchLoading" class="search-hint">Suche...</li>
+              <li v-else-if="companySearch.length > 0 && companySearch.length < 2" class="search-hint">Mind. 2 Zeichen...</li>
+              <li v-else-if="companySearch.length >= 2 && gefilterteCompanies.length === 0" class="search-hint">Kein Unternehmen gefunden</li>
+              <li v-for="c in gefilterteCompanies" :key="c.id" @mousedown="selectCompany(c)">{{ c.name }}<span v-if="c.municipality || c.canton" class="search-result-detail"> — {{ c.municipality }}<template v-if="c.municipality && c.canton">, </template>{{ c.canton }}</span></li>
             </ul>
           </div>
           <div class="form-group" v-if="form.company_id">
@@ -329,7 +332,10 @@
           </li>
         </ul>
 
-        <div v-if="gefilterteFirmen.length === 0" class="empty-small">Keine Firmen gefunden.</div>
+        <div v-if="firmenSearchLoading" class="empty-small">Suche...</div>
+        <div v-else-if="firmenSuche.length > 0 && firmenSuche.length < 2" class="empty-small">Mind. 2 Zeichen eingeben...</div>
+        <div v-else-if="firmenSuche.length >= 2 && gefilterteFirmen.length === 0" class="empty-small">Keine Firmen gefunden.</div>
+        <div v-else-if="firmenSuche.length === 0" class="empty-small">Firmenname eingeben um zu suchen...</div>
       </section>
 
       <!-- BEITRÄGE VERWALTEN -->
@@ -381,10 +387,13 @@
                 </div>
                 <div v-if="editBeitragForm.company_id" class="selected-company">
                   <span>{{ editBeitragCompanyName }}</span>
-                  <button type="button" class="btn-clear" @click="editBeitragForm.company_id = ''; editBeitragForm.product_id = ''; editBeitragCompanySearch = ''">&times;</button>
+                  <button type="button" class="btn-clear" @click="editBeitragForm.company_id = ''; editBeitragForm.product_id = ''; editBeitragCompanySearch = ''; editBeitragSelectedObj = null">&times;</button>
                 </div>
                 <ul class="search-results" v-if="editBeitragCompanyFocused && !editBeitragForm.company_id">
-                  <li v-for="c in editBeitragGefilterteCompanies" :key="c.id" @mousedown="editBeitragForm.company_id = c.id; editBeitragCompanySearch = c.name">{{ c.name }}</li>
+                  <li v-if="editBeitragCompanyLoading" class="search-hint">Suche...</li>
+                  <li v-else-if="editBeitragCompanySearch.length > 0 && editBeitragCompanySearch.length < 2" class="search-hint">Mind. 2 Zeichen...</li>
+                  <li v-else-if="editBeitragCompanySearch.length >= 2 && editBeitragGefilterteCompanies.length === 0" class="search-hint">Keine Firma gefunden</li>
+                  <li v-for="c in editBeitragGefilterteCompanies" :key="c.id" @mousedown="editBeitragForm.company_id = c.id; editBeitragCompanySearch = c.name; editBeitragSelectedObj = { id: c.id, name: c.name }">{{ c.name }}<span v-if="c.municipality || c.canton" class="search-result-detail"> — {{ c.municipality }}<template v-if="c.municipality && c.canton">, </template>{{ c.canton }}</span></li>
                 </ul>
               </div>
               <div class="form-group" v-if="editBeitragForm.company_id" style="margin-bottom: 0.8rem;">

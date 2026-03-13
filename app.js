@@ -22,6 +22,11 @@ async function hashPassword(password, salt) {
   return Array.from(new Uint8Array(bits), b => b.toString(16).padStart(2, '0')).join('')
 }
 
+function debounce(fn, delay) {
+  let timer = null
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay) }
+}
+
 const { createApp, ref, computed, watch, onMounted } = Vue
 
 createApp({
@@ -149,22 +154,54 @@ createApp({
     // Company search
     const companySearch = ref('')
     const companyFocused = ref(false)
+    const companySearchResults = ref([])
+    const companySearchLoading = ref(false)
+    const selectedCompanyObj = ref(null)
+
+    // Admin company search
+    const firmenSearchResults = ref([])
+    const firmenSearchLoading = ref(false)
+
+    // Edit post company search
+    const editBeitragCompanyResults = ref([])
+    const editBeitragCompanyLoading = ref(false)
 
     // Product search
     const productSearch = ref('')
     const productFocused = ref(false)
 
-    const gefilterteCompanies = computed(() => {
-      let list = companies.value
-      if (form.value.kategorie_id) {
-        list = list.filter(c => c.category_id === form.value.kategorie_id)
+    async function searchCompanies(query, targetResults, targetLoading) {
+      const q = query.trim()
+      if (q.length < 2) {
+        targetResults.value = []
+        return
       }
-      const q = companySearch.value.trim().toLowerCase()
-      if (q) {
-        list = list.filter(c => c.name.toLowerCase().includes(q))
+      targetLoading.value = true
+      try {
+        const rows = await sql`
+          SELECT id, name, municipality, canton
+          FROM company
+          WHERE name ILIKE ${'%' + q + '%'}
+          ORDER BY
+            (name ILIKE ${q + '%'}) DESC,
+            length(name) ASC
+          LIMIT 15
+        `
+        targetResults.value = rows
+      } catch (e) {
+        console.error('Company search error:', e)
+        targetResults.value = []
       }
-      return list
-    })
+      targetLoading.value = false
+    }
+
+    const debouncedCompanySearch = debounce((val) => searchCompanies(val, companySearchResults, companySearchLoading), 300)
+    const debouncedFirmenSearch = debounce((val) => searchCompanies(val, firmenSearchResults, firmenSearchLoading), 300)
+    const debouncedEditBeitragCompanySearch = debounce((val) => searchCompanies(val, editBeitragCompanyResults, editBeitragCompanyLoading), 300)
+
+    watch(companySearch, (val) => { if (!form.value.company_id) debouncedCompanySearch(val) })
+
+    const gefilterteCompanies = computed(() => companySearchResults.value)
 
     const gefilterteProducts = computed(() => {
       if (!form.value.company_id) return []
@@ -177,8 +214,7 @@ createApp({
     })
 
     const selectedCompanyName = computed(() => {
-      const c = companies.value.find(c => c.id === form.value.company_id)
-      return c ? c.name : ''
+      return selectedCompanyObj.value ? selectedCompanyObj.value.name : ''
     })
 
     const selectedProductName = computed(() => {
@@ -424,6 +460,7 @@ createApp({
 
     function selectCompany(company) {
       form.value.company_id = company.id
+      selectedCompanyObj.value = company
       companySearch.value = company.name
       companyFocused.value = false
     }
@@ -431,8 +468,10 @@ createApp({
     function clearCompany() {
       form.value.company_id = ''
       form.value.product_id = ''
+      selectedCompanyObj.value = null
       companySearch.value = ''
       productSearch.value = ''
+      companySearchResults.value = []
     }
 
     function selectProduct(product) {
@@ -473,19 +512,17 @@ createApp({
         const rows = await sql`
           INSERT INTO company (name, category_id, municipality, canton)
           VALUES (${name}, ${catId}, ${municipality}, ${canton})
-          RETURNING id, name, category_id
+          RETURNING id, name, municipality, canton
         `
         showCompanyModal.value = false
-        await ladeCompanies()
         if (rows.length > 0) {
           selectCompany(rows[0])
         }
       } catch (e) {
         if (e.message && e.message.includes('duplicate')) {
-          await ladeCompanies()
-          const existing = companies.value.find(c => c.name.toLowerCase() === name.toLowerCase())
-          if (existing) {
-            selectCompany(existing)
+          const found = await sql`SELECT id, name, municipality, canton FROM company WHERE lower(name) = ${name.toLowerCase()} AND municipality IS NOT DISTINCT FROM ${municipality} AND canton IS NOT DISTINCT FROM ${canton} LIMIT 1`
+          if (found.length > 0) {
+            selectCompany(found[0])
           }
           showCompanyModal.value = false
         } else {
@@ -532,6 +569,7 @@ createApp({
         VALUES (${form.value.company_id}, ${productId}, ${form.value.kanton}, ${form.value.text.trim()}, ${userId})
       `
       form.value = { kategorie_id: '', company_id: '', product_id: '', kanton: '', text: '' }
+      selectedCompanyObj.value = null
       companySearch.value = ''
       productSearch.value = ''
       await ladeBeitraege()
@@ -598,10 +636,12 @@ createApp({
     const editProduktForm = ref({ name: '', model: '' })
     const neuesProduktName = ref('')
 
+    watch(firmenSuche, (val) => { debouncedFirmenSearch(val) })
+
     const gefilterteFirmen = computed(() => {
-      const q = firmenSuche.value.trim().toLowerCase()
-      if (!q) return companies.value
-      return companies.value.filter(c => c.name.toLowerCase().includes(q))
+      const q = firmenSuche.value.trim()
+      if (q.length < 2) return []
+      return firmenSearchResults.value
     })
 
     const firmaProduktListe = computed(() => {
@@ -648,7 +688,12 @@ createApp({
         WHERE id = ${id}
       `
       editFirmaId.value = null
-      await Promise.all([ladeCompanies(), ladeBeitraege()])
+      // Refresh the current admin search results + posts
+      if (firmenSuche.value.trim().length >= 2) {
+        await Promise.all([searchCompanies(firmenSuche.value, firmenSearchResults, firmenSearchLoading), ladeBeitraege()])
+      } else {
+        await ladeBeitraege()
+      }
       loading.value = false
     }
 
@@ -657,7 +702,8 @@ createApp({
       try {
         await sql`DELETE FROM product WHERE company_id = ${comp.id}`
         await sql`DELETE FROM company WHERE id = ${comp.id}`
-        await Promise.all([ladeCompanies(), ladeProducts(), ladeBeitraege()])
+        firmenSearchResults.value = firmenSearchResults.value.filter(c => c.id !== comp.id)
+        await Promise.all([ladeProducts(), ladeBeitraege()])
       } catch (e) {
         alert('Firma kann nicht gelöscht werden: ' + e.message)
       }
@@ -735,15 +781,13 @@ createApp({
       return list
     })
 
-    const editBeitragGefilterteCompanies = computed(() => {
-      const q = editBeitragCompanySearch.value.trim().toLowerCase()
-      if (!q) return companies.value
-      return companies.value.filter(c => c.name.toLowerCase().includes(q))
-    })
+    watch(editBeitragCompanySearch, (val) => { if (!editBeitragForm.value.company_id) debouncedEditBeitragCompanySearch(val) })
 
+    const editBeitragGefilterteCompanies = computed(() => editBeitragCompanyResults.value)
+
+    const editBeitragSelectedObj = ref(null)
     const editBeitragCompanyName = computed(() => {
-      const c = companies.value.find(c => c.id === editBeitragForm.value.company_id)
-      return c ? c.name : ''
+      return editBeitragSelectedObj.value ? editBeitragSelectedObj.value.name : ''
     })
 
     const editBeitragProdukte = computed(() => {
@@ -763,6 +807,7 @@ createApp({
         canton: post.canton,
         content: post.content
       }
+      editBeitragSelectedObj.value = { id: post.company_id, name: post.company_name }
       editBeitragCompanySearch.value = post.company_name
       editKommentarId.value = null
       beitragKommentare.value = await ladeKommentare(post.id)
@@ -841,7 +886,7 @@ createApp({
 
     onMounted(async () => {
       loading.value = true
-      await Promise.all([ladeKategorien(), ladeCompanies(), ladeProducts(), ladeBeitraege(), checkSession()])
+      await Promise.all([ladeKategorien(), ladeProducts(), ladeBeitraege(), checkSession()])
       loading.value = false
       // Gemeinden im Hintergrund laden (nicht blockierend)
       ladeGemeinden()
@@ -855,6 +900,7 @@ createApp({
       kommentarFormOpen, loading, formNoteAccepted, showFormNote,
       companies, products, gefilterteCompanies, gefilterteProducts,
       companySearch, companyFocused, selectedCompanyName,
+      companySearchLoading, firmenSearchLoading, editBeitragCompanyLoading,
       productSearch, productFocused, selectedProductName,
       showCompanyModal, showProductModal, companyForm, productForm,
       gemeindeSearch, gemeindeFocused, gefilterteGemeinden,
@@ -876,7 +922,7 @@ createApp({
       kantonKuerzel,
       beitragSuche, beitragFilter, gefilterteBeitraegeAdmin,
       editBeitragId, editBeitragForm, editBeitragCompanySearch, editBeitragCompanyFocused,
-      editBeitragGefilterteCompanies, editBeitragCompanyName, editBeitragProdukte,
+      editBeitragGefilterteCompanies, editBeitragCompanyName, editBeitragProdukte, editBeitragSelectedObj,
       beitragBearbeiten, beitragSpeichern, beitragLoeschen, beitragFlag,
       beitragKommentare, editKommentarId, editKommentarText,
       kommentarBearbeitenAdmin, kommentarSpeichernAdmin, kommentarLoeschenAdmin,
