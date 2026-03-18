@@ -27,6 +27,39 @@ function debounce(fn, delay) {
   return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay) }
 }
 
+// ---- IMAGE UPLOAD ----
+const WORKER_URL = 'https://goppf-upload.felixschmid.workers.dev'
+
+async function resizeImage(file, maxWidth = 1200, quality = 0.8) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      let w = img.width, h = img.height
+      if (w > maxWidth) { h = Math.round(h * maxWidth / w); w = maxWidth }
+      const canvas = document.createElement('canvas')
+      canvas.width = w; canvas.height = h
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+      canvas.toBlob(blob => resolve(blob), 'image/jpeg', quality)
+    }
+    img.src = URL.createObjectURL(file)
+  })
+}
+
+async function uploadImage(file) {
+  const blob = await resizeImage(file)
+  const fd = new FormData()
+  fd.append('file', blob, 'image.jpg')
+  const res = await fetch(WORKER_URL + '/upload', { method: 'POST', body: fd })
+  if (!res.ok) throw new Error('Upload fehlgeschlagen')
+  const data = await res.json()
+  return data.url
+}
+
+async function deleteImage(url) {
+  const key = url.split('/').slice(-2).join('/')
+  await fetch(WORKER_URL + '/delete?key=' + encodeURIComponent(key), { method: 'DELETE' })
+}
+
 const { createApp, ref, computed, watch, onMounted } = Vue
 
 createApp({
@@ -42,6 +75,11 @@ createApp({
     const kommentarFormOpen = ref(false)
     const loading = ref(false)
     const formNoteAccepted = ref(false)
+
+    // Image upload
+    const imageFile = ref(null)
+    const imagePreview = ref(null)
+    const imageUploading = ref(false)
 
     // Auth
     const currentUser = ref(null)
@@ -355,7 +393,7 @@ createApp({
     async function ladeBeitraege() {
       const rows = await sql`
         SELECT p.id, p.content, p.canton, p.created_at, p.flagged,
-               p.company_id, p.product_id,
+               p.company_id, p.product_id, p.image_url,
                c.name as company_name,
                c.municipality as company_municipality, c.canton as company_canton,
                pr.name as product_name,
@@ -385,7 +423,7 @@ createApp({
 
     async function ladeBeitragDetail(id) {
       const rows = await sql`
-        SELECT p.id, p.content, p.canton, p.created_at,
+        SELECT p.id, p.content, p.canton, p.created_at, p.image_url,
                c.name as company_name, c.id as company_id,
                c.municipality as company_municipality, c.canton as company_canton,
                pr.name as product_name,
@@ -563,22 +601,62 @@ createApp({
       loading.value = false
     }
 
+    // ---- IMAGE HANDLERS ----
+
+    function onImageSelect(event) {
+      const file = event.target.files[0]
+      if (!file) return
+      const allowed = ['image/jpeg', 'image/png', 'image/webp']
+      if (!allowed.includes(file.type)) {
+        alert('Nur JPG, PNG oder WebP erlaubt.')
+        event.target.value = ''
+        return
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        alert('Bild darf max. 10 MB gross sein.')
+        event.target.value = ''
+        return
+      }
+      imageFile.value = file
+      imagePreview.value = URL.createObjectURL(file)
+    }
+
+    function clearImage() {
+      imageFile.value = null
+      if (imagePreview.value) { URL.revokeObjectURL(imagePreview.value) }
+      imagePreview.value = null
+    }
+
     // ---- BEITRAG ERSTELLEN ----
 
     async function beitragErstellen() {
       if (!form.value.company_id || !form.value.kanton || !form.value.text.trim()) return
       if (!currentUser.value) { openAuth('login'); return }
       loading.value = true
+      let imageUrl = null
+      if (imageFile.value) {
+        try {
+          imageUploading.value = true
+          imageUrl = await uploadImage(imageFile.value)
+        } catch (e) {
+          alert('Bild-Upload fehlgeschlagen: ' + e.message)
+          imageUploading.value = false
+          loading.value = false
+          return
+        }
+        imageUploading.value = false
+      }
       const productId = form.value.product_id || null
       const userId = currentUser.value.id
       await sql`
-        INSERT INTO post (company_id, product_id, canton, content, user_id)
-        VALUES (${form.value.company_id}, ${productId}, ${form.value.kanton}, ${form.value.text.trim()}, ${userId})
+        INSERT INTO post (company_id, product_id, canton, content, user_id, image_url)
+        VALUES (${form.value.company_id}, ${productId}, ${form.value.kanton}, ${form.value.text.trim()}, ${userId}, ${imageUrl})
       `
       form.value = { kategorie_id: '', company_id: '', product_id: '', kanton: '', text: '' }
       selectedCompanyObj.value = null
       companySearch.value = ''
       productSearch.value = ''
+      clearImage()
       await ladeBeitraege()
       loading.value = false
       navigate('home')
@@ -783,6 +861,7 @@ createApp({
     const beitragFilter = ref('alle')
     const editBeitragId = ref(null)
     const editBeitragForm = ref({ company_id: '', product_id: '', canton: '', content: '' })
+    const editBeitragImageUrl = ref(null)
     const editBeitragCompanySearch = ref('')
     const editBeitragCompanyFocused = ref(false)
     const beitragKommentare = ref([])
@@ -831,10 +910,26 @@ createApp({
         canton: post.canton,
         content: post.content
       }
+      editBeitragImageUrl.value = post.image_url || null
       editBeitragSelectedObj.value = { id: post.company_id, name: post.company_name }
       editBeitragCompanySearch.value = post.company_name
       editKommentarId.value = null
       beitragKommentare.value = await ladeKommentare(post.id)
+    }
+
+    async function removeEditBeitragImage(postId) {
+      loading.value = true
+      try {
+        if (editBeitragImageUrl.value) {
+          await deleteImage(editBeitragImageUrl.value)
+        }
+        await sql`UPDATE post SET image_url = NULL WHERE id = ${postId}`
+        editBeitragImageUrl.value = null
+        await ladeBeitraege()
+      } catch (e) {
+        alert('Fehler beim Entfernen des Bildes: ' + e.message)
+      }
+      loading.value = false
     }
 
     async function beitragSpeichern(id) {
@@ -858,6 +953,9 @@ createApp({
     async function beitragLoeschen(post) {
       loading.value = true
       try {
+        if (post.image_url) {
+          try { await deleteImage(post.image_url) } catch (e) { /* ignore R2 error */ }
+        }
         await sql`DELETE FROM comment WHERE post_id = ${post.id}`
         await sql`DELETE FROM post WHERE id = ${post.id}`
         editBeitragId.value = null
@@ -955,6 +1053,8 @@ createApp({
       beitragSuche, beitragFilter, gefilterteBeitraegeAdmin,
       editBeitragId, editBeitragForm, editBeitragCompanySearch, editBeitragCompanyFocused,
       editBeitragGefilterteCompanies, editBeitragCompanyName, editBeitragProdukte, editBeitragSelectedObj,
+      imageFile, imagePreview, imageUploading, onImageSelect, clearImage,
+      editBeitragImageUrl, removeEditBeitragImage,
       beitragBearbeiten, beitragSpeichern, beitragLoeschen, beitragFlag,
       beitragKommentare, editKommentarId, editKommentarText,
       kommentarBearbeitenAdmin, kommentarSpeichernAdmin, kommentarLoeschenAdmin,
