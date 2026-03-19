@@ -652,6 +652,18 @@ createApp({
         INSERT INTO post (company_id, product_id, canton, content, user_id, image_url)
         VALUES (${form.value.company_id}, ${productId}, ${form.value.kanton}, ${form.value.text.trim()}, ${userId}, ${imageUrl})
       `
+      // Assign category to company if selected
+      if (form.value.kategorie_id) {
+        await sql`INSERT INTO company_category (company_id, category_id) VALUES (${form.value.company_id}, ${form.value.kategorie_id}) ON CONFLICT DO NOTHING`
+      }
+      // Update company location from post canton
+      const kanton = form.value.kanton
+      if (kanton && selectedCompanyObj.value) {
+        const comp = selectedCompanyObj.value
+        if (!comp.canton) {
+          await sql`UPDATE company SET canton = ${kanton} WHERE id = ${form.value.company_id} AND canton IS NULL`
+        }
+      }
       form.value = { kategorie_id: '', company_id: '', product_id: '', kanton: '', text: '' }
       selectedCompanyObj.value = null
       companySearch.value = ''
